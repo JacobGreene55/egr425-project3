@@ -9,16 +9,16 @@ Turn-Based PVP
 Two players face off against each other in tanks. The map is 2D, with generated terrain tipically forming hills. Each player has their own turn. In each turn they have three actions: Moving/Adjusting their tank, selecting what type of "shot" to use, and firing. Tanks have a set of HP. The challenge of the game is calculating your aim and seeing weather or not you can outperform your opponent.
 
 ## Features
-Start Connection
-Start Screen
-Player Color Select
-Start Game Button
-Power Ups
-Moving the tank around
-Aiming barrel
-Shooting
-Projectile motion
-Damage
-Tank UI
-    Power Ups
-    Health
+- Start Connection
+- Start Screen
+- Player Color Select
+- Start Game Button
+- Power Ups
+- Moving the tank around
+- Aiming barrel
+- Shooting
+- Projectile motion
+- Damage
+- Tank UI
+ - Power Ups
+ - Health
