@@ -44,6 +44,9 @@ const int screenHeight = 240;
 unsigned long lastBLEUpdate = 0;
 const unsigned long BLE_UPDATE_INTERVAL = 100; // milliseconds
 
+int tankColor = {RED, BLUE, GREEN, YELLOW};
+String tankName = {PREDATOR, WRAITH, SCORPION, ABRAMS};
+
 String clientPlayerMove = "None";
 bool begin = true;
 bool playerMoved = false;
@@ -62,6 +65,7 @@ int player2YPos = screenHeight/2;
 void drawScreenTextWithBackground(String text, int backgroundColor);
 void setupController();
 bool connectToServer();
+void tankSelectionScreen();
 void drawGameScreen(bool begin);
 void updatePlayerPosition();
 void sendClientPosition();
@@ -236,6 +240,8 @@ void setup()
 ///////////////////////////////////////////////////////////////
 void loop()
 {
+    doConnect = true; //Debug line
+    
     // If the flag "doConnect" is true then we have scanned for and found the desired
     // BLE Server with which we wish to connect.  Now we connect to it.  Once we are
     // connected we set the connected flag to be false.
@@ -262,10 +268,13 @@ void loop()
     // with the current time since boot.
     if (deviceConnected)
     {
-      checkController();
-      updatePlayerPosition();
-      drawGameScreen(begin);
-      checkCollision();
+        if (begin) {
+            tankSelectionScreen();
+        }
+        checkController();
+        updatePlayerPosition();
+        drawGameScreen(begin);
+        checkCollision();
     }
     else if (doScan) {
         drawScreenTextWithBackground("Disconnected....re-scanning for BLE server...", TFT_ORANGE);
@@ -303,20 +312,34 @@ void setupController() {
 
 void checkController() {
   buttons = seeSaw.digitalReadBulk(button_mask);
-  int x = seeSaw.analogRead(JOY1_X);
-  int y = seeSaw.analogRead(JOY1_Y);
-  Serial.println("X:" + String(x) + "  Y:" + String(y));  
+  bool a = seeSaw.digitalRead(BUTTON_A);
+  bool b = seeSaw.digitalRead(BUTTON_B);
+  bool x = seeSaw.digitalRead(BUTTON_X);
+  bool y = seeSaw.digitalRead(BUTTON_Y);
+  int xAxis = seeSaw.analogRead(JOY1_X);
+  int yAxis = seeSaw.analogRead(JOY1_Y);
+  Serial.println("X:" + String(xAxis) + "  Y:" + String(yAxis));  
 
-  if (y <= 250) {
+  if (x) {
+    clientPlayerMove = "A";
+  } else if (b) {
+    clientPlayerMove = "B";
+  } else if (y) {
+    clientPlayerMove = "Y";
+  } else if (x) {
+    clientPlayerMove = "X";
+  }
+
+  if (yAxis <= 250) {
     clientPlayerMove = "Up";
     playerMoved = true;
-  } else if (y >= 770) {
+  } else if (yAxis >= 770) {
     clientPlayerMove = "Down";
     playerMoved = true;
-  } else if (x <= 250) {
+  } else if (xAxis <= 250) {
     clientPlayerMove = "Right";
     playerMoved = true;
-  } else if (x >= 770) {
+  } else if (xAxis >= 770) {
     clientPlayerMove = "Left";
     playerMoved = true;
   } else {
@@ -344,6 +367,28 @@ void checkWarp() {
 }
 
 // Game functions
+void tankSelectionScreen() {
+    while (clientPlayerMove != "A") {
+        checkController();
+        M5.Lcd.fillScreen(WHITE);
+        M5.Lcd.setTextColor(TFT_BROWN);
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.setCursor(screenWidth/2 - 100, screenHeight/2 - 30);
+        M5.Lcd.print("TANK SELECTION");
+
+        M5.Lcd.fillCircle(screenWidth/2, screenHeight/3, 40, tankColor);
+        M5.Lcd.drawCircle(screenWidth/2, screenHeight/3, 40, BLACK);
+        
+        M5.Lcd.setTextSize(2);
+        M5.Lcd.print(tankName);
+        delay(100);
+    }
+}
+
+void transitionScreen() {
+    M5.Aux
+}
+
 void drawGameScreen(bool begin) {
   if (begin) {
     M5.Lcd.fillScreen(BLACK);
