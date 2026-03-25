@@ -44,8 +44,8 @@ const int screenHeight = 240;
 unsigned long lastBLEUpdate = 0;
 const unsigned long BLE_UPDATE_INTERVAL = 100; // milliseconds
 
-int tankColor = {RED, BLUE, GREEN, YELLOW};
-String tankName = {PREDATOR, WRAITH, SCORPION, ABRAMS};
+int tankColor[4] = {RED, BLUE, GREEN, YELLOW};
+String tankName[4] = {"PREDATOR", "WRAITH", "SCORPION", "ABRAMS"};
 
 String clientPlayerMove = "None";
 bool begin = true;
@@ -66,6 +66,8 @@ void drawScreenTextWithBackground(String text, int backgroundColor);
 void setupController();
 bool connectToServer();
 void tankSelectionScreen();
+void transitionScreenOUT();
+void transitionScreenINTO();
 void drawGameScreen(bool begin);
 void updatePlayerPosition();
 void sendClientPosition();
@@ -225,12 +227,12 @@ void setup()
     // Retrieve a Scanner and set the callback we want to use to be informed when we
     // have detected a new device.  Specify that we want active scanning and start the
     // scan to run indefinitely (by passing in 0 for the "duration")
-    BLEScan *pBLEScan = BLEDevice::getScan();
-    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-    pBLEScan->setInterval(1349);
-    pBLEScan->setWindow(449);
-    pBLEScan->setActiveScan(true);
-    pBLEScan->start(0, false);
+    // BLEScan *pBLEScan = BLEDevice::getScan();
+    // pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+    // pBLEScan->setInterval(1349);
+    // pBLEScan->setWindow(449);
+    // pBLEScan->setActiveScan(true);
+    // pBLEScan->start(0, false);
 
     setupController();
 }
@@ -240,39 +242,43 @@ void setup()
 ///////////////////////////////////////////////////////////////
 void loop()
 {
-    doConnect = true; //Debug line
-    
     // If the flag "doConnect" is true then we have scanned for and found the desired
     // BLE Server with which we wish to connect.  Now we connect to it.  Once we are
     // connected we set the connected flag to be false.
-    if (doConnect == true)
-    {
-        if (connectToServer()) {
-            Serial.println("We are now connected to the BLE Server.");
-            if (begin) {
-              drawScreenTextWithBackground("Connected to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
-              delay(3000);
-              begin = false;
-            }
-            doConnect = false;
-            //drawGameScreen(begin);
-        }
-        else {
-            Serial.println("We have failed to connect to the server; there is nothin more we will do.");
-            drawScreenTextWithBackground("FAILED to connect to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
-            delay(3000);
-        }
-    }
+    // if (doConnect == true)
+    // {
+    //     if (connectToServer()) {
+    //         Serial.println("We are now connected to the BLE Server.");
+    //         if (begin) {
+    //           drawScreenTextWithBackground("Connected to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
+    //           delay(3000);
+    //           begin = false;
+    //         }
+    //         doConnect = false;
+    //         //drawGameScreen(begin);
+    //     }
+    //     else {
+    //         Serial.println("We have failed to connect to the server; there is nothin more we will do.");
+    //         drawScreenTextWithBackground("FAILED to connect to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
+    //         delay(3000);
+    //     }
+    // }
+
+    deviceConnected = true; // Debug line
 
     // If we are connected to a peer BLE Server, update the characteristic each time we are reached
     // with the current time since boot.
     if (deviceConnected)
     {
         if (begin) {
-            tankSelectionScreen();
+          tankSelectionScreen();
+          transitionScreenOUT();
         }
         checkController();
         updatePlayerPosition();
+        if (begin) {
+          transitionScreenINTO();
+        }
         drawGameScreen(begin);
         checkCollision();
     }
@@ -368,25 +374,59 @@ void checkWarp() {
 
 // Game functions
 void tankSelectionScreen() {
+    String text = "TANK SELECTION";
+    int i = 0;
+
+    M5.Lcd.fillScreen(WHITE);
+    M5.Lcd.setTextColor(DARKGREEN);
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setCursor(screenWidth/2 - text.length()*6*3/2, 35);
+    M5.Lcd.print(text);
+
+    M5.Lcd.fillCircle(screenWidth/2, screenHeight * 1/3 + 35, 40, tankColor[1]);
+    M5.Lcd.drawCircle(screenWidth/2, screenHeight * 1/3 + 35, 40, BLACK);
+    
+    //M5.Lcd.setTextSize(2);
+    M5.Lcd.setCursor(screenWidth/2 - tankName[1].length()*5*3/2, screenHeight/2 + 55);
+    M5.Lcd.print(tankName[1]);
     while (clientPlayerMove != "A") {
         checkController();
-        M5.Lcd.fillScreen(WHITE);
-        M5.Lcd.setTextColor(TFT_BROWN);
-        M5.Lcd.setTextSize(3);
-        M5.Lcd.setCursor(screenWidth/2 - 100, screenHeight/2 - 30);
-        M5.Lcd.print("TANK SELECTION");
+        if (clientPlayerMove == "Right" || clientPlayerMove == "Left") {
+            M5.Lcd.fillScreen(WHITE);
+            M5.Lcd.setTextColor(DARKGREEN);
+            M5.Lcd.setTextSize(3);
+            M5.Lcd.setCursor(screenWidth/2 - text.length()*6*3/2, 35);
+            M5.Lcd.print("TANK SELECTION");
+            
+            if (clientPlayerMove == "Right")  i++;
+            else if (clientPlayerMove == "Left") i--;
+            if (i < 0) i = 3;
+            else if (i > 3) i = 0;
 
-        M5.Lcd.fillCircle(screenWidth/2, screenHeight/3, 40, tankColor);
-        M5.Lcd.drawCircle(screenWidth/2, screenHeight/3, 40, BLACK);
-        
-        M5.Lcd.setTextSize(2);
-        M5.Lcd.print(tankName);
+            
+            M5.Lcd.fillCircle(screenWidth/2, screenHeight * 1/3 + 35, 40, tankColor[i]);
+            M5.Lcd.drawCircle(screenWidth/2, screenHeight * 1/3 + 35, 40, BLACK);
+
+            //M5.Lcd.setTextSize(2);
+            M5.Lcd.setCursor(screenWidth/2 - tankName[i].length()*5*3/2, screenHeight/2 + 55);
+            M5.Lcd.setTextColor(tankColor[i]);
+            M5.Lcd.print(tankName[i]);
+        }
         delay(100);
     }
 }
 
-void transitionScreen() {
-    M5.Aux
+void transitionScreenOUT() {
+  for (int i = 0; i < 8; i++) {
+    M5.Axp.SetLcdVoltage(3200-i*50);
+    delay(100);
+  }
+}
+void transitionScreenINTO() {
+  for (int i = 0; i < 8; i++) {
+    M5.Axp.SetLcdVoltage(2800+i*50);
+    delay(100);
+  }
 }
 
 void drawGameScreen(bool begin) {
