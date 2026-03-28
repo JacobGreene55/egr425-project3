@@ -68,7 +68,7 @@ int tank2 = 0;
 
 int floorHeight = 175;
 uint16_t skyColor = CYAN;
-uint16_t floorColor = 0;
+uint16_t floorColor = M5.Lcd.color565(240, 239, 173);
 
 bool updateUI = true;
 bool player1Damaged = false;
@@ -162,11 +162,11 @@ void checkBoarderLimit();
 void checkCollision();
 
 // UI Draw Functions //
-//health function
 void drawHealth();
 void refreshDrawTank();
 void drawPlayerTitles();
 void drawItems();
+void drawBarrelOutline();
 
 // Server Communication Functions //
 void sendClientPosition();
@@ -405,6 +405,7 @@ void loop()
           drawTank(tankColor[tank1], tankPos1, barrelAngle1);
           drawTank(tankColor[tank2], tankPos2, barrelAngle2);
 
+          Serial.println("Entering SelectPower function");
           tankPower2 = selectPower(tankPower2);
 
           shoot(tankColor[tank2], tankPos2, barrelAngle2, tankPower2);
@@ -510,12 +511,16 @@ void getProjectilePos(){
 /////////////////////////////////////////////////////////////////////////
 
 Power selectPower(Power prevPower){
-  if(M5.BtnA.isPressed()){
+  Serial.println("Selecting power..."); //Debugging
+  if(M5.BtnA.wasPressed()){
     return SMALL;
-  } else if(M5.BtnB.isPressed()){
+    Serial.println("Small power selected");
+  } else if(M5.BtnB.wasPressed()){
     return MEDIUM;
-  } else if(M5.BtnC.isPressed()){
+    Serial.println("Medium power selected");
+  } else if(M5.BtnC.wasPressed()){
     return LARGE;
+    Serial.println("Large power selected");
   } else {
     return prevPower;
   }
@@ -687,11 +692,11 @@ void tankSelectionScreen() {
         }
       }
       if (seeSaw.digitalRead(BUTTON_A) == LOW) {
-        Serial.println("Player 1 ready with tank " + tankName[i]);
-        tank1 = i;
+        Serial.println("Player 2 ready with tank " + tankName[i]);
+        tank2 = i;
         player2Ready = true;
       }
-      delay(250);
+      delay(200);
   }
 }
 
@@ -712,7 +717,9 @@ void updatePlayerUI() {
   if (updateUI) {
     drawPlayerTitles();
 
-    //drawItems();
+    drawItems();
+
+    drawBarrelOutline();
 
     if (player1Damaged) {
       drawHealth(RED, GREEN, tankHealth1, tankHealth2);
@@ -735,10 +742,12 @@ void updatePlayerUI() {
 
     if (player1Turn) {
       drawHealth(tankColor[tank1], tankColor[tank2], tankHealth1, tankHealth2);
-      M5.Lcd.drawRect(healthBarX1 - 4, healthBarY - 4, healthBarWidth + 8, healthBarHeight + 8, GREENYELLOW);
+      M5.Lcd.drawRect(healthBarX1 - 4, healthBarY - 4, healthBarWidth + 8, healthBarHeight + 8, RED);
+      M5.Lcd.drawRect(healthBarX2 - 5, healthBarY - 5, healthBarWidth + 10, healthBarHeight + 10, RED);
     } else {
       drawHealth(tankColor[tank1], tankColor[tank2], tankHealth1, tankHealth2);
-      M5.Lcd.drawRect(healthBarX2 - 4, healthBarY - 4, healthBarWidth + 8, healthBarHeight + 8, GREENYELLOW);
+      M5.Lcd.drawRect(healthBarX2 - 4, healthBarY - 4, healthBarWidth + 8, healthBarHeight + 8, RED);
+      M5.Lcd.drawRect(healthBarX2 - 5, healthBarY - 5, healthBarWidth + 10, healthBarHeight + 10, RED);
     }
   }
 }
@@ -765,30 +774,30 @@ void drawPlayerTitles() {
 void drawItems() {
   M5.Lcd.fillRect(itemX1, itemY, itemSquareSize, itemSquareSize, WHITE);
   M5.Lcd.drawRect(itemX1, itemY, itemSquareSize, itemSquareSize, BLACK);
-  switch (tank1ShotType) {
-    case NORMAL:
+  switch (tankPower1) {
+    case SMALL:
       M5.Lcd.fillCircle(itemX1 + itemSquareSize/2, itemY + itemSquareSize/2, 12, BLACK);
       break;
-    case SPLIT:
+    case MEDIUM:
       M5.Lcd.fillCircle(itemX1 + itemSquareSize/2 - 5, itemY + itemSquareSize/2, 10, BLACK);
       M5.Lcd.fillCircle(itemX1 + itemSquareSize/2 + 5, itemY + itemSquareSize/2, 10, BLACK);
       break;
-    case STRAIFE_RUN:
+    case LARGE:
       M5.Lcd.fillRect(itemX1 + itemSquareSize/2 - 7, itemY + itemSquareSize/2 - 3, 14, 6, BLACK);
       break;
   }
 
   M5.Lcd.fillRect(itemX2, itemY, itemSquareSize, itemSquareSize, WHITE);
   M5.Lcd.drawRect(itemX2, itemY, itemSquareSize, itemSquareSize, BLACK);
-  switch (tank2ShotType) {
-    case NORMAL:
+  switch (tankPower2) {
+    case SMALL:
       M5.Lcd.fillCircle(itemX2 + itemSquareSize/2, itemY + itemSquareSize/2, 12, BLACK);
       break;
-    case SPLIT:
+    case MEDIUM:
       M5.Lcd.fillCircle(itemX2 + itemSquareSize/2 - 5, itemY + itemSquareSize/2, 10, BLACK);
       M5.Lcd.fillCircle(itemX2 + itemSquareSize/2 + 5, itemY + itemSquareSize/2, 10, BLACK);
       break;
-    case STRAIFE_RUN:
+    case LARGE:
       M5.Lcd.fillRect(itemX2 + itemSquareSize/2 - 7, itemY + itemSquareSize/2 - 3, 14, 6, BLACK);
       break;
   }
@@ -814,12 +823,30 @@ void drawTank(uint16_t color,int xPos,int angle){
   }
 }
 
+void drawBarrelOutline() {
+  if (player1Turn) {
+    int xStart1 = tankPos1 + 20*cos(barrelAngle1*DEG_TO_RAD);
+    int yStart1 = tankBodyY - 5 - 20*sin(barrelAngle1*DEG_TO_RAD);
+    int xEnd1 = tankPos1 + 5 + tankPower1 * 20*cos(barrelAngle1*DEG_TO_RAD); //tankPos1 + tankPower1+2*cos(barrelAngle1*DEG_TO_RAD);
+    int yEnd1 = tankBodyY - 5 - tankPower1 * 20*sin(barrelAngle1*DEG_TO_RAD); //tankPos1 + tankPower1+2*sin(barrelAngle1*DEG_TO_RAD);
+    M5.Lcd.drawLine(xStart1, yStart1, xEnd1, yEnd1, BLACK);
+  }
+
+  if (!player1Turn) {
+    int xStart2 = tankPos2 + 20*cos(barrelAngle2*DEG_TO_RAD);
+    int yStart2 = tankBodyY - 5 - 20*sin(barrelAngle2*DEG_TO_RAD);
+    int xEnd2 = tankPos2 + 5 + tankPower2 * 20*cos(barrelAngle2*DEG_TO_RAD); //tankPos2 + tankPower2+2*cos(barrelAngle2*DEG_TO_RAD);
+    int yEnd2 = tankBodyY - 5 - tankPower2 * 20*sin(barrelAngle2*DEG_TO_RAD); //tankPos2 + tankPower2+2*sin(barrelAngle2*DEG_TO_RAD);
+    M5.Lcd.drawLine(xStart2, yStart2, xEnd2, yEnd2, BLACK);
+  }
+}
+
 void refreshDrawTank() {
   if (playerMoved && player1Turn) {
-    M5.Lcd.fillRect(tankPos1 - tankSizeX - 20, tankBodyY - 20, tankSizeX + 40, tankSizeY + 20, skyColor);
+    M5.Lcd.fillRect(tankPos1 - tankSizeX - 60, tankBodyY - 70, tankSizeX + 120, tankSizeY + 70, skyColor);
     playerMoved = false;
   } else if (playerMoved && !player1Turn) {
-    M5.Lcd.fillRect(tankPos2 - tankSizeX - 20, tankBodyY - 20, tankSizeX + 40, tankSizeY + 20, skyColor);
+    M5.Lcd.fillRect(tankPos2 - tankSizeX - 60, tankBodyY - 70, tankSizeX + 120, tankSizeY + 70, skyColor);
     playerMoved = false;
   }
 }
