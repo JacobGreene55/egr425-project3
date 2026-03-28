@@ -107,8 +107,10 @@ const int largeSizeR = 12;
 
 const float gravity = 0.5;
 const float projOffset = 20;
-float projX = 0;
-float projY = 300; //init beyond screen
+float projX1 = 0;
+float projY1 = 300; //init beyond screen
+float projX2 = 0;
+float projY2 = 300; //init beyond screen
 int projSizeR = 0;
 float vx = 0;
 float vy = 0;
@@ -169,7 +171,7 @@ void drawItems();
 void drawBarrelOutline();
 
 // Server Communication Functions //
-void sendClientPosition();
+void sendClientTankInfo();
 void updateServerPosition();
 
 
@@ -189,9 +191,20 @@ static void notifyCallback(BLERemoteCharacteristic *pBLERemoteCharacteristic, ui
     // Parse server position from the notification
     String str = String((char*)pData);
     if (str.indexOf("-") != -1) {
-        tankPos2 = str.substring(0, str.indexOf("-")).toInt();
-        // player2YPos = str.substring(str.indexOf("-") + 1).toInt();
-        Serial.printf("Updated player2 position: X=%d", tankPos2);
+      tank1 = str.substring(str.indexOf("_"), str.indexOf("-")).toInt();
+      tankHealth1 = str.substring(str.indexOf("-"), str.indexOf("=")).toInt();
+      int temp = str.substring(str.indexOf("="), str.indexOf("+")).toInt();
+      if(temp == 0){
+        tankPower1 = SMALL;
+      } else if(temp == 1){
+        tankPower1 = MEDIUM;
+      } else if(temp == 2){
+        tankPower1 = LARGE;
+      }
+      tankPos1 = str.substring(str.indexOf("+"), str.indexOf(">")).toInt();
+
+      projX1 = str.substring(str.indexOf(">"), str.indexOf(",")).toInt();
+      projY1 = str.substring(str.indexOf(","), str.indexOf(")")).toInt();
     }
 }
 
@@ -323,12 +336,12 @@ void setup()
     // Retrieve a Scanner and set the callback we want to use to be informed when we
     // have detected a new device.  Specify that we want active scanning and start the
     // scan to run indefinitely (by passing in 0 for the "duration")
-    // BLEScan *pBLEScan = BLEDevice::getScan();
-    // pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-    // pBLEScan->setInterval(1349);
-    // pBLEScan->setWindow(449);
-    // pBLEScan->setActiveScan(true);
-    // pBLEScan->start(0, false);
+    BLEScan *pBLEScan = BLEDevice::getScan();
+    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+    pBLEScan->setInterval(1349);
+    pBLEScan->setWindow(449);
+    pBLEScan->setActiveScan(true);
+    pBLEScan->start(0, false);
 
     setupController();
 }
@@ -341,26 +354,26 @@ void loop()
     // If the flag "doConnect" is true then we have scanned for and found the desired
     // BLE Server with which we wish to connect.  Now we connect to it.  Once we are
     // connected we set the connected flag to be false.
-    // if (doConnect == true)
-    // {
-    //     if (connectToServer()) {
-    //         Serial.println("We are now connected to the BLE Server.");
-    //         if (begin) {
-    //           drawScreenTextWithBackground("Connected to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
-    //           delay(3000);
-    //           begin = false;
-    //         }
-    //         doConnect = false;
-    //         //drawMap(begin);
-    //     }
-    //     else {
-    //         Serial.println("We have failed to connect to the server; there is nothin more we will do.");
-    //         drawScreenTextWithBackground("FAILED to connect to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
-    //         delay(3000);
-    //     }
-    // }
+    if (doConnect == true)
+    {
+        if (connectToServer()) {
+            Serial.println("We are now connected to the BLE Server.");
+            if (begin) {
+              drawScreenTextWithBackground("Connected to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
+              delay(3000);
+              begin = false;
+            }
+            doConnect = false;
+            //drawMap(begin);
+        }
+        else {
+            Serial.println("We have failed to connect to the server; there is nothin more we will do.");
+            drawScreenTextWithBackground("FAILED to connect to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
+            delay(3000);
+        }
+    }
 
-    deviceConnected = true; // Debug line
+    //deviceConnected = true; // Debug line
 
     // If we are connected to a peer BLE Server, update the characteristic each time we are reached
     // with the current time since boot.
@@ -405,7 +418,7 @@ void loop()
           drawTank(tankColor[tank1], tankPos1, barrelAngle1);
           drawTank(tankColor[tank2], tankPos2, barrelAngle2);
 
-          Serial.println("Entering SelectPower function");
+          //Serial.println("Entering SelectPower function"); //Dubug line
           tankPower2 = selectPower(tankPower2);
 
           shoot(tankColor[tank2], tankPos2, barrelAngle2, tankPower2);
@@ -511,16 +524,18 @@ void getProjectilePos(){
 /////////////////////////////////////////////////////////////////////////
 
 Power selectPower(Power prevPower){
-  Serial.println("Selecting power..."); //Debugging
-  if(M5.BtnA.wasPressed()){
-    return SMALL;
+  M5.update();  // ensure button states are refreshed every loop
+  //Serial.println("Selecting power..."); //Debugging
+
+  if (M5.BtnA.wasPressed()) {
     Serial.println("Small power selected");
-  } else if(M5.BtnB.wasPressed()){
-    return MEDIUM;
+    return SMALL;
+  } else if (M5.BtnB.wasPressed()) {
     Serial.println("Medium power selected");
-  } else if(M5.BtnC.wasPressed()){
-    return LARGE;
+    return MEDIUM;
+  } else if (M5.BtnC.wasPressed()) {
     Serial.println("Large power selected");
+    return LARGE;
   } else {
     return prevPower;
   }
@@ -559,14 +574,14 @@ void shoot(uint16_t color, int xPos, int angle, Power power){
     float angleRad = angle * DEG_TO_RAD;
 
     //init projectile at tip of barrel X and Y pos
-    projX = xPos + (projOffset+projSizeR/2) * cos(angleRad); 
-    projY = tankBarrelY - (projOffset+projSizeR/2) * sin(angleRad);
+    projX2 = xPos + (projOffset+projSizeR/2) * cos(angleRad); 
+    projY2 = tankBarrelY - (projOffset+projSizeR/2) * sin(angleRad);
     
     vx = speed * cos(angleRad);
     vy = -speed * sin(angleRad);
   
     //pause game until projectile strikes ground
-    while((projY <= floorHeight) & (projX <= screenWidth) & (projX >= 0)){
+    while((projY2 <= floorHeight) & (projX2 <= screenWidth) & (projX2 >= 0)){
       //draw projectile in new position
       projectileMotion(color);
     }
@@ -600,21 +615,21 @@ void checkCollision(Power power){
 
 void projectileMotion(uint16_t color){
   //calculate new position and velocity
-  projX += vx;
-  projY += vy;
+  projX2 += vx;
+  projY2 += vy;
 
   vy += gravity;  // gravity pulls down
 
-  Serial.printf("projX: %f - projY: %f\n", projX, projY); //debug
+  Serial.printf("projX: %f - projY: %f\n", projX2, projY2); //debug
 
   // draw projectile in new position
-  M5.Lcd.fillCircle(projX, projY, projSizeR, color);
+  M5.Lcd.fillCircle(projX2, projY2, projSizeR, color);
 
   //small delay for animation
   delay(50);
 
   //erase previous projectile
-  M5.Lcd.fillCircle(projX, projY, projSizeR, skyColor);
+  M5.Lcd.fillCircle(projX2, projY2, projSizeR, skyColor);
 }
 
 void checkBoarderLimit() {
@@ -776,14 +791,13 @@ void drawItems() {
   M5.Lcd.drawRect(itemX1, itemY, itemSquareSize, itemSquareSize, BLACK);
   switch (tankPower1) {
     case SMALL:
-      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2, itemY + itemSquareSize/2, 12, BLACK);
+      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2, itemY + itemSquareSize/2, 5, BLACK);
       break;
     case MEDIUM:
-      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2 - 5, itemY + itemSquareSize/2, 10, BLACK);
-      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2 + 5, itemY + itemSquareSize/2, 10, BLACK);
+      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2, itemY + itemSquareSize/2, 8, BLACK);
       break;
     case LARGE:
-      M5.Lcd.fillRect(itemX1 + itemSquareSize/2 - 7, itemY + itemSquareSize/2 - 3, 14, 6, BLACK);
+      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2, itemY + itemSquareSize/2, 12, BLACK);
       break;
   }
 
@@ -791,14 +805,13 @@ void drawItems() {
   M5.Lcd.drawRect(itemX2, itemY, itemSquareSize, itemSquareSize, BLACK);
   switch (tankPower2) {
     case SMALL:
-      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2, itemY + itemSquareSize/2, 12, BLACK);
+      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2, itemY + itemSquareSize/2, 5, BLACK);
       break;
     case MEDIUM:
-      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2 - 5, itemY + itemSquareSize/2, 10, BLACK);
-      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2 + 5, itemY + itemSquareSize/2, 10, BLACK);
+      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2, itemY + itemSquareSize/2, 8, BLACK);
       break;
     case LARGE:
-      M5.Lcd.fillRect(itemX2 + itemSquareSize/2 - 7, itemY + itemSquareSize/2 - 3, 14, 6, BLACK);
+      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2, itemY + itemSquareSize/2, 12, BLACK);
       break;
   }
 }
@@ -825,18 +838,26 @@ void drawTank(uint16_t color,int xPos,int angle){
 
 void drawBarrelOutline() {
   if (player1Turn) {
+    int power1Ratio = 3;
+    if (tankPower1 == SMALL) power1Ratio = 3;
+    else if (tankPower1 == MEDIUM) power1Ratio = 2;
+    else power1Ratio = 1;
     int xStart1 = tankPos1 + 20*cos(barrelAngle1*DEG_TO_RAD);
     int yStart1 = tankBodyY - 5 - 20*sin(barrelAngle1*DEG_TO_RAD);
-    int xEnd1 = tankPos1 + 5 + tankPower1 * 20*cos(barrelAngle1*DEG_TO_RAD); //tankPos1 + tankPower1+2*cos(barrelAngle1*DEG_TO_RAD);
-    int yEnd1 = tankBodyY - 5 - tankPower1 * 20*sin(barrelAngle1*DEG_TO_RAD); //tankPos1 + tankPower1+2*sin(barrelAngle1*DEG_TO_RAD);
+    int xEnd1 = tankPos1 + power1Ratio * 20*cos(barrelAngle1*DEG_TO_RAD); //tankPos1 + tankPower1+2*cos(barrelAngle1*DEG_TO_RAD);
+    int yEnd1 = tankBodyY - 5 - power1Ratio * 20*sin(barrelAngle1*DEG_TO_RAD); //tankPos1 + tankPower1+2*sin(barrelAngle1*DEG_TO_RAD);
     M5.Lcd.drawLine(xStart1, yStart1, xEnd1, yEnd1, BLACK);
   }
 
   if (!player1Turn) {
+    int power2Ratio = 3;
+    if (tankPower2 == SMALL) power2Ratio = 3;
+    else if (tankPower2 == MEDIUM) power2Ratio = 2;
+    else power2Ratio = 1;
     int xStart2 = tankPos2 + 20*cos(barrelAngle2*DEG_TO_RAD);
     int yStart2 = tankBodyY - 5 - 20*sin(barrelAngle2*DEG_TO_RAD);
-    int xEnd2 = tankPos2 + 5 + tankPower2 * 20*cos(barrelAngle2*DEG_TO_RAD); //tankPos2 + tankPower2+2*cos(barrelAngle2*DEG_TO_RAD);
-    int yEnd2 = tankBodyY - 5 - tankPower2 * 20*sin(barrelAngle2*DEG_TO_RAD); //tankPos2 + tankPower2+2*sin(barrelAngle2*DEG_TO_RAD);
+    int xEnd2 = tankPos2 + power2Ratio * 20*cos(barrelAngle2*DEG_TO_RAD); //tankPos2 + tankPower2+2*cos(barrelAngle2*DEG_TO_RAD);
+    int yEnd2 = tankBodyY - 5 - power2Ratio * 20*sin(barrelAngle2*DEG_TO_RAD); //tankPos2 + tankPower2+2*sin(barrelAngle2*DEG_TO_RAD);
     M5.Lcd.drawLine(xStart2, yStart2, xEnd2, yEnd2, BLACK);
   }
 }
@@ -854,7 +875,7 @@ void refreshDrawTank() {
 /////////////////////////////////////////////////////////////////////////
 //Bluetooth Server functions
 /////////////////////////////////////////////////////////////////////////
-void sendClientPosition() {
+void sendClientTankInfo() {
   if (bleRemoteCharacteristic_C == nullptr) {
     Serial.println("ERROR: bleRemoteCharacteristic_C is null");
     return;
@@ -871,11 +892,13 @@ void sendClientPosition() {
   }
   
   Serial.println("Updating server with new position...");
-  String position = String(tankPos1);
-  Serial.println("Sending position to server: " + position);
+  String message = String(serverGameState) + "," + String(tankColor[tank1]) + "," + 
+                   String(tankHealth1) + "=" + String(tankPower1) + "+" + String(tankPos1) + ">" + String(projX2) + 
+                   "," + String(projY2);
+  Serial.println("Sending position to server: " + message);
   
   // Use writeValue with response=false to avoid blocking
-  bleRemoteCharacteristic_C->writeValue((uint8_t*)position.c_str(), position.length(), false);
+  bleRemoteCharacteristic_C->writeValue((uint8_t*)message.c_str(), message.length(), false);
   Serial.println("Position sent successfully");
 }
 
