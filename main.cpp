@@ -109,7 +109,7 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
 /////////////////////////////////////////////////////////////////////////
 //Joystick/Gamepad Buttons variables
 /////////////////////////////////////////////////////////////////////////
-Adafruit_seesaw ss = Adafruit_seesaw(&Wire);
+Adafruit_seesaw seeSaw = Adafruit_seesaw(&Wire);
 
 #define BUTTON_X      6
 #define BUTTON_Y      2
@@ -129,13 +129,13 @@ uint32_t buttons;
 /////////////////////////////////////////////////////////////////////////
 //display variables
 /////////////////////////////////////////////////////////////////////////
-int sWidth = 0;
-int sHeight = 0;
+int screenWidth = 0;
+int screenHeight = 0;
 
 //draw map variables
 int floorHeight = 175;
 uint16_t skyColor = CYAN;
-uint16_t floorColor = 0;
+uint16_t floorColor = M5.Lcd.color565(240, 239, 173);
 
 //draw tank variables
 const int tankSizeX = 25;
@@ -144,8 +144,8 @@ const int tankSizeR = 7;
 const int barrelSizeL = 15;
 const int barrelSizeH = 3;
 
-int tankBodyY = 0;
-int tankBarrelY = 0;
+int tankBodyY = floorHeight - tankSizeY;
+int tankBarrelY = tankBodyY + barrelSizeH/2;
 
 /////////////////////////////////////////////////////////////////////////
 //game tank variables
@@ -160,7 +160,7 @@ int tankHealth1 = 100;
 int tankHealth2 = 100;
 
 /////////////////////////////////////////////////////////////////////////
-//game projectile variables
+//game state variables
 /////////////////////////////////////////////////////////////////////////
 
 //server controls the game state
@@ -171,10 +171,23 @@ enum GameState{
   PLAYER2_TURN,
   GAME_OVER
 };
-// GameState gameState = CONNECTING; //startup default state
-GameState gameState = PLAYER1_TURN; //testing default state
+GameState serverGameState = CONNECTING; //default state
+GameState clientGameState = CONNECTING; //default state
 
+bool player2Ready = false;
+bool player1Ready = true; //debug change to false after
 
+/////////////////////////////////////////////////////////////////////////
+//customize player variables
+/////////////////////////////////////////////////////////////////////////
+int tankColor[4] = {MAROON, NAVY, GREEN, YELLOW};
+String tankName[4] = {"PREDATOR", "WRAITH", "SCORPION", "ABRAMS"};
+int tank1 = 0;
+int tank2 = 0;
+
+/////////////////////////////////////////////////////////////////////////
+//power variables
+/////////////////////////////////////////////////////////////////////////
 enum Power{
   SMALL,
   MEDIUM,
@@ -195,6 +208,10 @@ const int smallDmg = 5;
 const int medDmg = 20;
 const int largeDmg = 35;
 
+/////////////////////////////////////////////////////////////////////////
+//game projectile variables
+/////////////////////////////////////////////////////////////////////////
+
 const float gravity = 0.5;
 const float projOffset = 20;
 float projX1 = 0;
@@ -209,12 +226,34 @@ float speed = 0;
 bool collision;
 
 /////////////////////////////////////////////////////////////////////////
+//health UI variables
+/////////////////////////////////////////////////////////////////////////
+bool updateUI = true;
+
+bool player1Damaged = false;
+bool player2Damaged = false;
+bool player1Turn = true;
+int healthBarWidth = 100;
+int healthBarHeight = 10;
+int healthBarY = 30;
+int healthBarX1 = 20;
+int healthBarX2 = 0;
+
+/////////////////////////////////////////////////////////////////////////
+//power item UI variables
+/////////////////////////////////////////////////////////////////////////
+int itemSquareSize = 40;
+int itemY = 0;
+int itemX1 = itemSquareSize - 20;
+int itemX2 = 0;
+
+/////////////////////////////////////////////////////////////////////////
 //functions
 /////////////////////////////////////////////////////////////////////////
 //bluetooth functions
 void broadcastBleServer();
-void readData();
-void sendData();
+void readClientData();
+void sendServerData();
 
 //joystick functions
 void setupJoystick();
@@ -224,10 +263,20 @@ void drawMap();
 void drawTank(uint16_t color,int xPos,int angle);
 void drawHealth(uint16_t color1, uint16_t color2, int hp1, int hp2);
 void drawGameOver(bool whoWon);
-// void drawHealth(uint16_t color1, int color2, int hp1, int hp2);
+void drawScreenTextWithBackground(String text, int backgroundColor);
+void drawItems();
+void drawPlayerItems();
+void drawPlayerTitles();
+void updatePlayerUI();
 
 //game functions
 void serverGameManager();
+
+//customize player functions
+void tankSelectionScreen();
+
+void transitionScreenStart();
+void transitionScreenEnd();
 
 //tank control functions
 int controlAngle(int angle);
@@ -247,22 +296,37 @@ void checkCollision(Power power);
 //Setup
 /////////////////////////////////////////////////////////////////////////
 void setup() {
+  //bluetooth connection
+
   M5.begin();
-  sWidth = M5.Lcd.width();
-  sHeight = M5.Lcd.height();
-  Serial.println(sWidth);
-  Serial.println(sHeight);
 
-  //draw map
-  floorColor = M5.Lcd.color565(240, 239, 173);
-  drawMap();
+  //initialize vars
+  screenWidth = M5.Lcd.width();
+  screenHeight = M5.Lcd.height();
+  Serial.println(screenWidth);
+  Serial.println(screenHeight);
 
-  //draw tanks
-  tankColor1 = M5.Lcd.color565(12, 140, 72);
-  tankBodyY = floorHeight - tankSizeY;
-  tankBarrelY = floorHeight - tankSizeY - tankSizeR/2 + 2;
-  drawTank(tankColor1, tankPos1, barrelAngle1);
-  drawTank(tankColor2, tankPos2, barrelAngle2);
+  itemY = screenHeight - itemSquareSize - 10;
+  itemX2 = screenWidth - itemSquareSize - 20;
+
+  healthBarX2 = screenWidth - healthBarWidth - 20;
+
+  // Initialize M5Core2 as a BLE server
+  Serial.print("Starting BLE...");
+  BLEDevice::init(BLE_BROADCAST_NAME.c_str());
+
+  // Broadcast the BLE server
+  drawScreenTextWithBackground("Initializing BLE...", TFT_CYAN);
+  broadcastBleServer();
+  drawScreenTextWithBackground("Broadcasting as BLE server named:\n\n" + BLE_BROADCAST_NAME, TFT_BLUE);
+
+  //wait until connected
+  while(!deviceConnected){
+    Serial.println("Waiting for a client to connect...");
+    delay(500);
+  }
+  drawScreenTextWithBackground("Connected to BLE server: ", TFT_GREEN);
+  delay(3000);
 
   setupJoystick();
 }
@@ -285,7 +349,30 @@ void loop() {
 //game manager
 void serverGameManager(){
   //player turn
-  if(gameState == PLAYER1_TURN){
+  if(serverGameState == CONNECTING){
+    Serial.println("CONNECTING State");
+    
+    serverGameState = CUSTOMIZE_PLAYER; //debug
+  } else if(serverGameState == CUSTOMIZE_PLAYER){
+    Serial.println("CUSTOMIZE_PLAYER State");
+
+    //customize player color
+    tankSelectionScreen();
+    if (player2Ready && player1Ready) {
+      serverGameState = PLAYER1_TURN;// dubug line, replace with reading the server's game state
+      player2Ready = false;
+      transitionScreenStart();
+      drawMap();
+      transitionScreenEnd();
+    }
+          // Serial.println(serverGameState);
+  } else if(serverGameState == PLAYER1_TURN){
+    Serial.println("PLAYER1_TURN State");
+
+    // updatePlayerUI();
+    updatePlayerUI();
+
+
     //erase previous tank
     drawTank(skyColor, tankPos1, barrelAngle1);
     drawTank(skyColor, tankPos2, barrelAngle2);
@@ -297,8 +384,8 @@ void serverGameManager(){
     barrelAngle1 = controlAngle(barrelAngle1);
 
     //draw tank in new position
-    drawTank(tankColor1, tankPos1, barrelAngle1);
-    drawTank(tankColor2, tankPos2, barrelAngle2);
+    drawTank(tankColor[tank1], tankPos1, barrelAngle1);
+    drawTank(tankColor[tank2], tankPos2, barrelAngle2);
 
     //select power
     tankPower1 = selectPower(tankPower1);
@@ -306,11 +393,15 @@ void serverGameManager(){
     //send tank/power over bluetooth to client
 
     //spawn projectile and animate, pause game until projectile strikes the ground
-    shoot(tankColor1, tankPos1, barrelAngle1, tankPower1);
+    shoot(tankColor[tank1], tankPos1, barrelAngle1, tankPower1);
 
     //check change turn
 
-  } else if(gameState == PLAYER2_TURN){
+  } else if(serverGameState == PLAYER2_TURN){
+    Serial.println("PLAYER2_TURN State");
+
+    // updatePlayerUI();
+
     //bluetooth player
     //get bluetooth date from client
     //get player pos
@@ -319,7 +410,9 @@ void serverGameManager(){
     //get projectile pos
     //check collisions
 
-  } else if(gameState == GAME_OVER){
+  } else if(serverGameState == GAME_OVER){
+    Serial.println("GAME_OVER State");
+
     drawGameOver(0); //--------------------------------FIXME --------------------------check who won
   }
   
@@ -333,12 +426,12 @@ void serverGameManager(){
 
 // Joystick Setup
 void setupJoystick() {
-  while(!ss.begin(0x50)){
+  while(!seeSaw.begin(0x50)){
     Serial.println("ERROR! seesaw not found");
     delay(100);
   }
   Serial.println("seesaw started at 0x50");
-  uint32_t version = ((ss.getVersion() >> 16) & 0xFFFF);
+  uint32_t version = ((seeSaw.getVersion() >> 16) & 0xFFFF);
   if (version != 5743) {
     Serial.print("Wrong firmware loaded? ");
     Serial.println(version);
@@ -346,7 +439,7 @@ void setupJoystick() {
   }
   Serial.println("Found Product 5743");
 
-  ss.pinModeBulk(button_mask, INPUT_PULLUP);
+  seeSaw.pinModeBulk(button_mask, INPUT_PULLUP);
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -355,15 +448,21 @@ void setupJoystick() {
 
 int controlAngle(int angle){
   //check joystick up and down buttons
-  if (!ss.digitalRead(BUTTON_X)) {
+  if (!seeSaw.digitalRead(BUTTON_X)) {
     Serial.println("X Button Pressed, ROTATE LEFT"); //Debugging
     if(angle < 180){
       angle += 3; //rotate left
+      
+      //BLUETOOTH
+      sendServerData(); //update client with new angle values
     }
-  } else if(!ss.digitalRead(BUTTON_B)){
+  } else if(!seeSaw.digitalRead(BUTTON_B)){
     Serial.println("B Button Pressed, ROTATE RIGHT");
     if(angle > 0){
       angle -= 3; //rotate right
+
+      //BLUETOOTH
+      sendServerData(); //update client with new angle values
     }
   }
 
@@ -372,15 +471,21 @@ int controlAngle(int angle){
 
 int controlMove(int xPos){
   //check joystick up and down buttons
-  if (!ss.digitalRead(BUTTON_Y)) {
+  if (!seeSaw.digitalRead(BUTTON_Y)) {
     Serial.println("Y Button Pressed, MOVE LEFT"); //Debugging
     if(xPos > tankSizeX/2){
       xPos -= 3; //move left
+
+      //BLUETOOTH
+      sendServerData(); //update client with new move values
     }
-  } else if(!ss.digitalRead(BUTTON_A)){
+  } else if(!seeSaw.digitalRead(BUTTON_A)){
     Serial.println("A Button Pressed, MOVE RIGHT");
-    if(xPos < sWidth - tankSizeX/2){
+    if(xPos < screenWidth - tankSizeX/2){
       xPos += 3; //move right
+
+      //BLUETOOTH
+      sendServerData(); //update client with new move values
     }
   }
   
@@ -408,10 +513,19 @@ void getProjectilePos(){
 Power selectPower(Power prevPower){
   if(M5.BtnA.isPressed()){
     return SMALL;
+
+    //BLUETOOTH
+    sendServerData(); //update client with new power values
   } else if(M5.BtnB.isPressed()){
     return MEDIUM;
+
+    //BLUETOOTH
+    sendServerData(); //update client with new power values
   } else if(M5.BtnC.isPressed()){
     return LARGE;
+
+    //BLUETOOTH
+    sendServerData(); //update client with new power values
   } else {
     return prevPower;
   }
@@ -419,7 +533,7 @@ Power selectPower(Power prevPower){
 
 void shoot(uint16_t color, int xPos, int angle, Power power){
 
-  if (!ss.digitalRead(BUTTON_SELECT)) {
+  if (!seeSaw.digitalRead(BUTTON_SELECT)) {
     Serial.println("SELECT Button Pressed, SHOOT"); //Debugging
 
     //spawn projectile based on power type, give initial speed
@@ -458,6 +572,9 @@ void shoot(uint16_t color, int xPos, int angle, Power power){
 
     //calculate projectile motion and check for collisions/hit
     projectileMotion(color, power);
+
+    //BLUETOOTH
+    sendServerData(); //update client with new projectile values
   }
 }
 
@@ -485,12 +602,21 @@ void projectileMotion(uint16_t color, Power power){
     //erase previous projectile
     M5.Lcd.fillCircle(projX1, projY1, projSizeR, skyColor);
   }
+
+  //switch turn after collision
+  if(serverGameState == PLAYER1_TURN){
+    serverGameState = PLAYER2_TURN;
+    player1Turn = false;
+  } else if(serverGameState == PLAYER2_TURN){
+    serverGameState = PLAYER1_TURN;
+    player1Turn = true;
+  }
 }
 
 //check collisions
 void checkCollision(Power power){
   //check if out of screen
-  if(projX1 > sWidth || projX1 < 0){
+  if(projX1 > screenWidth || projX1 < 0){
     Serial.println("MISS, out of screen");
     collision = true;
     return;
@@ -510,7 +636,7 @@ void checkCollision(Power power){
   }
 
   float targetX;
-  if(gameState == PLAYER1_TURN){
+  if(serverGameState == PLAYER1_TURN){
     targetX = tankPos2;
   } else {
     targetX = tankPos1;
@@ -573,17 +699,76 @@ void damage(Power power){
     dmg = largeDmg;
   }
 
-  if(gameState == PLAYER1_TURN){
+  if(serverGameState == PLAYER1_TURN){
     //damage player 2
     tankHealth2 -= dmg;
     Serial.printf("Player 2 Health: %d\n", tankHealth2);
-  } else if(gameState == PLAYER2_TURN){
+  } else if(serverGameState == PLAYER2_TURN){
     //damage player 1
     tankHealth1 -= dmg;
     Serial.printf("Player 1 Health: %d\n", tankHealth1);
   }
 
-  // drawHealth(tankColor1, tankColor2, tankHealth1, tankHealth2);
+  //BLUETOOTH
+  sendServerData(); //update client with new health values
+}
+
+void updatePlayerUI() {
+  if (updateUI) {
+    drawPlayerTitles();
+
+    drawItems();
+
+    // drawBarrelOutline();
+
+    if (player1Damaged) {
+      drawHealth(RED, GREEN, tankHealth1, tankHealth2);
+      delay(300);
+      drawHealth(GREEN, GREEN, tankHealth1, tankHealth2);
+      delay(300);
+      drawHealth(RED, GREEN, tankHealth1, tankHealth2);
+      delay(300);
+      drawHealth(GREEN, GREEN, tankHealth1, tankHealth2);
+    } 
+    else if (player2Damaged) {
+      drawHealth(GREEN, RED, tankHealth1, tankHealth2);
+      delay(300);
+      drawHealth(GREEN, GREEN, tankHealth1, tankHealth2);
+      delay(300);
+      drawHealth(GREEN, RED, tankHealth1, tankHealth2);
+      delay(300);
+      drawHealth(GREEN, GREEN, tankHealth1, tankHealth2);
+    }
+
+    if (player1Turn) {
+      drawHealth(tankColor[tank1], tankColor[tank2], tankHealth1, tankHealth2);
+      M5.Lcd.drawRect(healthBarX1 - 4, healthBarY - 4, healthBarWidth + 8, healthBarHeight + 8, RED);
+      M5.Lcd.drawRect(healthBarX2 - 5, healthBarY - 5, healthBarWidth + 10, healthBarHeight + 10, RED);
+    } else {
+      drawHealth(tankColor[tank1], tankColor[tank2], tankHealth1, tankHealth2);
+      M5.Lcd.drawRect(healthBarX2 - 4, healthBarY - 4, healthBarWidth + 8, healthBarHeight + 8, RED);
+      M5.Lcd.drawRect(healthBarX2 - 5, healthBarY - 5, healthBarWidth + 10, healthBarHeight + 10, RED);
+    }
+  }
+}
+
+void drawHealth(uint16_t color1, uint16_t color2, int hp1, int hp2){
+  M5.Lcd.fillRect(healthBarX1, healthBarY, healthBarWidth * hp1 / 100, healthBarHeight, color1);
+  M5.Lcd.drawRect(healthBarX1, healthBarY, healthBarWidth, healthBarHeight, BLACK);
+  M5.Lcd.fillRect(healthBarX2, healthBarY, healthBarWidth * hp2 / 100, healthBarHeight, color2);
+  M5.Lcd.drawRect(healthBarX2, healthBarY, healthBarWidth, healthBarHeight, BLACK);
+}
+
+void drawPlayerTitles() {
+  M5.Lcd.setTextSize(2);
+
+  M5.Lcd.setCursor(healthBarX1,healthBarHeight - 2);
+  M5.Lcd.setTextColor(tankColor[tank1]);
+  M5.Lcd.print("Player 1");
+
+  M5.Lcd.setCursor(healthBarX2,healthBarHeight - 2);
+  M5.Lcd.setTextColor(tankColor[tank2]);
+  M5.Lcd.print("Player 2");
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -592,7 +777,7 @@ void damage(Power power){
 
 void drawMap(){
   M5.Lcd.fillScreen(skyColor);
-  M5.Lcd.fillRect(0, floorHeight, sWidth, sHeight - floorHeight, floorColor);
+  M5.Lcd.fillRect(0, floorHeight, screenWidth, screenHeight - floorHeight, floorColor);
 }
 
 void drawTank(uint16_t color,int xPos,int angle){
@@ -608,8 +793,34 @@ void drawTank(uint16_t color,int xPos,int angle){
   }
 }
 
-void drawHealth(uint16_t color1, int color2, int hp1, int hp2){
-  
+void drawItems() {
+  M5.Lcd.fillRect(itemX1, itemY, itemSquareSize, itemSquareSize, WHITE);
+  M5.Lcd.drawRect(itemX1, itemY, itemSquareSize, itemSquareSize, BLACK);
+  switch (tankPower1) {
+    case SMALL:
+      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2, itemY + itemSquareSize/2, 5, BLACK);
+      break;
+    case MEDIUM:
+      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2, itemY + itemSquareSize/2, 8, BLACK);
+      break;
+    case LARGE:
+      M5.Lcd.fillCircle(itemX1 + itemSquareSize/2, itemY + itemSquareSize/2, 12, BLACK);
+      break;
+  }
+
+  M5.Lcd.fillRect(itemX2, itemY, itemSquareSize, itemSquareSize, WHITE);
+  M5.Lcd.drawRect(itemX2, itemY, itemSquareSize, itemSquareSize, BLACK);
+  switch (tankPower2) {
+    case SMALL:
+      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2, itemY + itemSquareSize/2, 5, BLACK);
+      break;
+    case MEDIUM:
+      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2, itemY + itemSquareSize/2, 8, BLACK);
+      break;
+    case LARGE:
+      M5.Lcd.fillCircle(itemX2 + itemSquareSize/2, itemY + itemSquareSize/2, 12, BLACK);
+      break;
+  }
 }
 
 void drawGameOver(bool whoWon){
@@ -623,6 +834,91 @@ void drawGameOver(bool whoWon){
     M5.Lcd.println("Player 1 Wins!");
   } else {
     M5.Lcd.println("Player 2 Wins!");
+  }
+}
+
+// draw text an a background color
+void drawScreenTextWithBackground(String text, int backgroundColor) {
+    M5.Lcd.fillScreen(backgroundColor);
+    M5.Lcd.setCursor(0,0);
+    M5.Lcd.println(text);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//customize player functions
+/////////////////////////////////////////////////////////////////////////
+
+void tankSelectionScreen() {
+    String text = "TANK SELECTION";
+    int i = 0;
+
+    M5.Lcd.fillScreen(0x4B5320); // Olive drab military color
+    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setCursor(screenWidth/2 - text.length()*6*3/2, 45);
+    M5.Lcd.print(text);
+
+    while (!player2Ready) {
+      //check for joystick left and right input
+      if (seeSaw.analogRead(JOY1_X) < 480 || seeSaw.analogRead(JOY1_X) > 544) {
+        M5.Lcd.fillScreen(0x4B5320); // Olive military color
+        M5.Lcd.setTextColor(WHITE);
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.setCursor(screenWidth/2 - text.length()*6*3/2, 45);
+        M5.Lcd.print("TANK SELECTION");
+        
+        if (seeSaw.analogRead(JOY1_X) < 480)  i++;
+        else if (seeSaw.analogRead(JOY1_X) > 544) i--;
+        if (i < 0) i = 3;
+        else if (i > 3) i = 0;
+
+        M5.Lcd.fillCircle(screenWidth/2, screenHeight * 1/3 + 45, 40, tankColor[i]);
+        M5.Lcd.drawCircle(screenWidth/2, screenHeight * 1/3 + 45, 40, BLACK);
+        M5.Lcd.drawCircle(screenWidth/2, screenHeight * 1/3 + 45, 39, BLACK);
+        M5.Lcd.drawCircle(screenWidth/2, screenHeight * 1/3 + 45, 38, BLACK);
+
+        //M5.Lcd.setTextSize(2);
+        M5.Lcd.setCursor(screenWidth/2 - tankName[i].length()*6*3/2 + 5, screenHeight/2 + 65);
+        M5.Lcd.setTextColor(tankColor[i]);
+        M5.Lcd.print(tankName[i]);
+
+        switch (i) {
+          case 0:
+              M5.Lcd.fillEllipse(screenWidth/2, screenHeight * 1/3 + 45, 8, 35, BLACK);
+              break;
+          case 1:
+              //TODO: Add unique barrel design for WRAITH
+              M5.Lcd.fillRect(screenWidth/2 - 4, screenHeight * 1/3 + 10, 8, 30, BLACK);
+              break;
+          case 2:
+              //TODO: Add unique barrel design for SCORPION
+              M5.Lcd.fillRect(screenWidth/2 - 4, screenHeight * 1/3 + 10, 8, 30, BLACK);
+              break;
+          case 3:
+              //TODO: Add unique barrel design for ABRAMS
+              M5.Lcd.fillRect(screenWidth/2 - 4, screenHeight * 1/3 + 10, 8, 30, BLACK);
+              break;
+        }
+      }
+      if (seeSaw.digitalRead(BUTTON_A) == LOW) {
+        Serial.println("Player 2 ready with tank " + tankName[i]);
+        tank2 = i;
+        player2Ready = true;
+      }
+      delay(200);
+  }
+}
+
+void transitionScreenStart() {
+  for (int i = 0; i < 16; i++) {
+    M5.Axp.SetLcdVoltage(2800-i*50);
+    delay(50);
+  }
+}
+void transitionScreenEnd() {
+  for (int i = 0; i < 16; i++) {
+    M5.Axp.SetLcdVoltage(2000+i*50);
+    delay(50);
   }
 }
 
@@ -669,7 +965,7 @@ void broadcastBleServer() {
 
 }
 
-void readData()
+void readClientData()
 {
   //read from ble
   //data from player2 client player
@@ -681,13 +977,28 @@ void readData()
 
   // parse the data
   
-  //format: gameState_color-health=power+tankPosX>projPosX,projPosY
-  //ranges: (0-1)_(0-3)-(0-100)=(0-2)+(0-320)>(0-320,0-240)
+  //format: serverGameState_color-health=power+tankPosX>projPosX,projPosY
+  //ranges: (0-4)_(0-3)-(0-100)=(0-2)+(0-320)>(0-320,0-240)
 
-  //gameState controlled, not received by server
-  tankColor2 = str.substring(str.indexOf("_"), str.indexOf("-")).toInt();
+  //get game state
+  int temp = str.substring(0, str.indexOf("_")).toInt();
+  if(temp == 0){
+    clientGameState = CONNECTING;
+  } else if(temp == 1){
+    clientGameState = CUSTOMIZE_PLAYER;
+  } else if(temp == 2){
+    clientGameState = PLAYER1_TURN;
+  } else if(temp == 3){
+    clientGameState = PLAYER2_TURN;
+  } else if(temp == 4){
+    clientGameState = GAME_OVER;
+  }
+
+  tank2 = str.substring(str.indexOf("_"), str.indexOf("-")).toInt();
   tankHealth2 = str.substring(str.indexOf("-"), str.indexOf("=")).toInt();
-  int temp = str.substring(str.indexOf("="), str.indexOf("+")).toInt();
+
+  //get power
+  temp = str.substring(str.indexOf("="), str.indexOf("+")).toInt();
   if(temp == 0){
     tankPower2 = SMALL;
   } else if(temp == 1){
@@ -701,15 +1012,19 @@ void readData()
   projY2 = str.substring(str.indexOf(","), str.indexOf(")")).toInt();
 }
 
-void sendData(){
+void sendServerData(){
   // write to ble
-  //data for player1 Server player
+  // data for player1 Server player
 
-  //format: gameState_color-health=power+tankPosX>projPosX,projPosY)
-  //ranges: (0-1)_(0-3)-(0-100)=(0-2)+(0-320)>(0-320,0-240)
+  // format: serverGameState_color-health=power+tankPosX>projPosX,projPosY)
+  // ranges: (0-1)_(0-3)-(0-100)=(0-2)+(0-320)>(0-320,0-240)
 
-  //convert to string
-  String str = String(gameState) + "_" + String(tankColor1) + "-" + String(tankHealth1) + "=" + String(tankPower1) + "+" + String(tankPos1) + ">" + String(projX1) + "," + String(projY1);
+  // convert to string
+  // tank color index
+  // FIXME
+  String str = String(serverGameState) + "_" + String(tank1) + "-" + 
+               String(tankHealth1) + "=" + String(tankPower1) + "+" + 
+               String(tankPos1) + ">" + String(projX1) + "," + String(projY1);
 
   // write the charactistic's value as a string (which can be read by a client)
   bleCharacteristic_S->setValue(str.c_str());
