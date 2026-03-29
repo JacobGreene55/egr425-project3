@@ -19,7 +19,7 @@ static BLEUUID CHARACTERISTIC_UUID_S("7dcf8cb1-a9b1-44e6-bed5-3c2ffe02bb07"); //
 static BLEUUID CHARACTERISTIC_UUID_C("41755070-8e22-4588-bf9b-80dd3ac3f42f"); 
 
 // BLE Broadcast Name
-static String BLE_BROADCAST_NAME = "The bruhs M5Core2";
+static String BLE_BROADCAST_NAME = "M5 Core2 Tanks Game";
 
 // controller declarations
 Adafruit_seesaw seeSaw = Adafruit_seesaw(&Wire);
@@ -54,7 +54,8 @@ enum GameState{
   GAME_OVER
 };
 // GameState gameState = CONNECTING; //startup default state
-GameState serverGameState = CUSTOMIZE_PLAYER; //testing default state
+GameState serverGameState = CONNECTING; //testing default state
+GameState clientGameState = CONNECTING;
 bool player2Ready = false;
 bool player1Ready = true; //debug change to false after
 
@@ -185,26 +186,57 @@ void drawGameOver(bool whoWon);
 ///////////////////////////////////////////////////////////////
 static void notifyCallback(BLERemoteCharacteristic *pBLERemoteCharacteristic, uint8_t *pData, size_t length, bool isNotify)
 {
+    String str = String((char*)pData, length);
+    str.trim();
     Serial.printf("Notify callback for characteristic %s of data length %d\n", pBLERemoteCharacteristic->getUUID().toString().c_str(), length);
-    Serial.printf("\tData: %s\n", (char *)pData);
-    
-    // Parse server position from the notification
-    String str = String((char*)pData);
-    if (str.indexOf("-") != -1) {
-      tank1 = str.substring(str.indexOf("_"), str.indexOf("-")).toInt();
-      tankHealth1 = str.substring(str.indexOf("-"), str.indexOf("=")).toInt();
-      int temp = str.substring(str.indexOf("="), str.indexOf("+")).toInt();
-      if(temp == 0){
-        tankPower1 = SMALL;
-      } else if(temp == 1){
-        tankPower1 = MEDIUM;
-      } else if(temp == 2){
-        tankPower1 = LARGE;
-      }
-      tankPos1 = str.substring(str.indexOf("+"), str.indexOf(">")).toInt();
+    Serial.printf("\tData: %s\n", str.c_str());
 
-      projX1 = str.substring(str.indexOf(">"), str.indexOf(",")).toInt();
-      projY1 = str.substring(str.indexOf(","), str.indexOf(")")).toInt();
+    if (str.length() == 0) {
+        return;
+    }
+
+    int uIdx = str.indexOf('_');
+    if (uIdx > 0) {
+        int gs = str.substring(0, uIdx).toInt();
+        if (gs >= CONNECTING && gs <= GAME_OVER) {
+            serverGameState = (GameState)gs;
+            player1Turn = (serverGameState == PLAYER1_TURN);
+        }
+    }
+
+    int dashIdx = str.indexOf('-', uIdx + 1);
+    int eqIdx = str.indexOf('=', dashIdx + 1);
+    int plusIdx = str.indexOf('+', eqIdx + 1);
+    int gtIdx = str.indexOf('>', plusIdx + 1);
+    int commaIdx = str.indexOf(',', gtIdx + 1);
+
+    if (uIdx > 0 && dashIdx > uIdx && eqIdx > dashIdx && plusIdx > eqIdx && gtIdx > plusIdx) {
+        tank1 = str.substring(uIdx + 1, dashIdx).toInt();
+        tankHealth1 = str.substring(dashIdx + 1, eqIdx).toInt();
+
+        int power = str.substring(eqIdx + 1, plusIdx).toInt();
+        if (power == 0) tankPower1 = SMALL;
+        else if (power == 1) tankPower1 = MEDIUM;
+        else if (power == 2) tankPower1 = LARGE;
+
+        tankPos1 = str.substring(plusIdx + 1, gtIdx).toInt();
+
+        if (commaIdx > gtIdx) {
+            projX1 = str.substring(gtIdx + 1, commaIdx).toFloat();
+            projY1 = str.substring(commaIdx + 1).toFloat();
+        } else {
+            projX1 = str.substring(gtIdx + 1).toFloat();
+        }
+
+        if (serverGameState == PLAYER1_TURN) {
+            clientGameState = PLAYER1_TURN;
+        } else if (serverGameState == PLAYER2_TURN) {
+            clientGameState = PLAYER2_TURN;
+        } else if (serverGameState == GAME_OVER) {
+            clientGameState = GAME_OVER;
+        }
+
+        updateUI = true;
     }
 }
 
@@ -379,17 +411,18 @@ void loop()
     // with the current time since boot.
     while (deviceConnected)
     {
-      switch (serverGameState) {
+      switch (clientGameState) {
         case CONNECTING:
           drawScreenTextWithBackground("Connected to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
           delay(3000); // Debug lines <  ^
-          serverGameState = CUSTOMIZE_PLAYER;// dubug line, replace with reading the server's game state
+          clientGameState = CUSTOMIZE_PLAYER;// dubug line, replace with reading the server's game state
           break;
         case CUSTOMIZE_PLAYER:
           tankSelectionScreen();
           if (player2Ready && player1Ready) {
-            serverGameState = PLAYER1_TURN;// dubug line, replace with reading the server's game state
+            clientGameState = PLAYER1_TURN;// dubug line, replace with reading the server's game state
             player2Ready = false;
+            sendClientTankInfo();
             transitionScreenStart();
             drawMap();
             transitionScreenEnd();
@@ -398,12 +431,24 @@ void loop()
           break;
         case PLAYER1_TURN:
           player1Turn = true;
+          updatePlayerUI();
+          drawTank(tankColor[tank1], tankPos1, barrelAngle1);
+          drawTank(tankColor[tank2], tankPos2, barrelAngle2);
           //recieve tank/power over bluetooth from server, update player 1's stuff
           //TODO: Finish function
           //spawn projectile and animate, pause game until projectile strikes the ground
           //shoot(tankColor[tank1], tankPos1, barrelAngle1, tankPower1);
-          serverGameState = PLAYER2_TURN;
-          player1Turn = false;
+          if (serverGameState == PLAYER2_TURN) {
+            clientGameState = PLAYER2_TURN;
+            player1Turn = false;
+            sendClientTankInfo();
+          }
+          
+          if (tankHealth2 <= 0) {
+            whoWon = false; //Server's perspective
+            clientGameState = GAME_OVER;
+            sendClientTankInfo();
+          }
           // Handle player 1's turn
           break;
         case PLAYER2_TURN:
@@ -422,12 +467,18 @@ void loop()
           tankPower2 = selectPower(tankPower2);
 
           shoot(tankColor[tank2], tankPos2, barrelAngle2, tankPower2);
+
+          if (tankHealth1 <= 0) {
+            whoWon = false; //Server's perspective
+            clientGameState = GAME_OVER;
+          }
           // Handle player 2's turn
           break;
         case GAME_OVER:
           drawGameOver(whoWon);
           break;
-      } 
+      }
+      delay(100);
     }
     if (doScan) {
       drawScreenTextWithBackground("Disconnected....re-scanning for BLE server...", TFT_ORANGE);
@@ -588,6 +639,9 @@ void shoot(uint16_t color, int xPos, int angle, Power power){
 
     //check collision
     checkCollision(power);
+    
+    clientGameState = PLAYER1_TURN; //end turn after shooting
+    sendClientTankInfo();
   }
 }
 
@@ -892,8 +946,8 @@ void sendClientTankInfo() {
   }
   
   Serial.println("Updating server with new position...");
-  String message = String(serverGameState) + "," + String(tankColor[tank1]) + "," + 
-                   String(tankHealth1) + "=" + String(tankPower1) + "+" + String(tankPos1) + ">" + String(projX2) + 
+  String message = String(clientGameState) + "," + String(tankColor[tank2]) + "," + 
+                   String(tankHealth2) + "=" + String(tankPower2) + "+" + String(tankPos2) + ">" + String(projX2) + 
                    "," + String(projY2);
   Serial.println("Sending position to server: " + message);
   
@@ -916,7 +970,7 @@ void drawGameOver(bool whoWon){
   M5.Lcd.println("Game Over\n");
 
   //check who won
-  if(whoWon == 0){
+  if(whoWon){
     M5.Lcd.println("Player 1 Wins!");
   } else {
     M5.Lcd.println("Player 2 Wins!");
