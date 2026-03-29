@@ -103,6 +103,15 @@ const int smallSizeR = 4;
 const int medSizeR = 8;
 const int largeSizeR = 12;
 
+const int smallSpd = 12;
+const int medSpd = 10;
+const int largeSpd = 8;
+
+const int smallDmg = 5;
+const int medDmg = 20;
+const int largeDmg = 35;
+
+bool collision = false;
 const float gravity = 0.5;
 const float projOffset = 20;
 float projX1 = 0;
@@ -130,6 +139,8 @@ bool whoWon = false;
 // Old positions for refresh
 int oldTankPos1 = 50;
 int oldTankPos2 = 250;
+int oldBarrelAngle1 = 0;
+int oldBarrelAngle2 = 0;
 
 ///////////////////////////////////////////////////////////////
 // Forward Declarations
@@ -160,8 +171,9 @@ int controlMove(int xPos);
 //projectile/shoot functions
 Power selectPower(Power prevPower);
 void shoot(uint16_t color, int xPos, int angle, Power power);
-void projectileMotion(uint16_t color);
+void projectileMotion(uint16_t color, Power power);
 void checkCollision(Power power);
+void damage(Power power);
 
 //tank location
 void checkBoarderLimit();
@@ -170,10 +182,10 @@ void checkCollision();
 // UI Draw Functions //
 void drawHealth();
 void refreshDrawTank();
-void drawBullet();
 void drawPlayerTitles();
 void drawItems();
 void drawBarrelOutline();
+void drawProjectile1(uint16_t color, Power power);
 
 // Server Communication Functions //
 void sendClientTankInfo();
@@ -213,6 +225,8 @@ static void notifyCallback(BLERemoteCharacteristic *pBLERemoteCharacteristic, ui
     int plusIdx = str.indexOf('+', eqIdx + 1);
     int gtIdx = str.indexOf('>', plusIdx + 1);
     int commaIdx = str.indexOf(',', gtIdx + 1);
+    int atIdx = str.indexOf('@', plusIdx + 1);
+    int curlyIdx = str.indexOf('}');
 
     if (uIdx > 0 && dashIdx > uIdx && eqIdx > dashIdx && plusIdx > eqIdx && gtIdx > plusIdx) {
         tank1 = str.substring(uIdx + 1, dashIdx).toInt();
@@ -224,10 +238,10 @@ static void notifyCallback(BLERemoteCharacteristic *pBLERemoteCharacteristic, ui
         else if (power == 2) tankPower1 = LARGE;
 
         // Parse position and angle
-        int atIdx = str.indexOf('@', plusIdx + 1);
-        if (atIdx > plusIdx && atIdx < gtIdx) {
+        if (atIdx > gtIdx) {
             oldTankPos1 = tankPos1;
             tankPos1 = str.substring(plusIdx + 1, atIdx).toInt();
+            oldBarrelAngle1 = barrelAngle1;
             barrelAngle1 = str.substring(atIdx + 1, gtIdx).toInt();
         } else {
             oldTankPos1 = tankPos1;
@@ -291,6 +305,7 @@ bool connectToServer()
     if (!bleClient->connect(bleRemoteServer))
         Serial.printf("FAILED to connect to server (%s)\n", bleRemoteServer->getName().c_str());
     Serial.printf("\tConnected to server (%s)\n", bleRemoteServer->getName().c_str());
+    bleClient->setMTU(512);
 
     // Obtain a reference to the service we are after in the remote BLE server.
     BLERemoteService *bleRemoteService = bleClient->getService(SERVICE_UUID);
@@ -379,6 +394,7 @@ void setup()
     drawScreenTextWithBackground("Scanning for BLE server...", TFT_BLUE);
 
     BLEDevice::init("");
+    BLEDevice::setMTU(512);
 
     // Retrieve a Scanner and set the callback we want to use to be informed when we
     // have detected a new device.  Specify that we want active scanning and start the
@@ -429,13 +445,12 @@ void loop()
       switch (clientGameState) {
         case CONNECTING:
           drawScreenTextWithBackground("Connected to BLE server: " + String(bleRemoteServer->getName().c_str()), TFT_GREEN);
-          delay(3000); // Debug lines <  ^
+          delay(1000); // Debug lines <  ^
           clientGameState = CUSTOMIZE_PLAYER;// dubug line, replace with reading the server's game state
           break;
         case CUSTOMIZE_PLAYER:
           tankSelectionScreen();
-          if (player2Ready && player1Ready) {
-            clientGameState = PLAYER1_TURN;// dubug line, replace with reading the server's game state
+          if (player1Ready && player2Ready) {
             player2Ready = false;
             sendClientTankInfo();
             transitionScreenStart();
@@ -446,29 +461,28 @@ void loop()
           break;
         case PLAYER1_TURN:
           player1Turn = true;
+
+          //erase projectile
+          drawProjectile1(skyColor, tankPower1);
+
+          sendClientTankInfo();
           updatePlayerUI();
           refreshDrawTank();
           drawTank(tankColor[tank1], tankPos1, barrelAngle1);
           drawTank(tankColor[tank2], tankPos2, barrelAngle2);
+          drawProjectile1(tankColor[tank1], tankPower1);
           //recieve tank/power over bluetooth from server, update player 1's stuff
           //TODO: Finish function
           //spawn projectile and animate, pause game until projectile strikes the ground
           //shoot(tankColor[tank1], tankPos1, barrelAngle1, tankPower1);
 
-          if (projX1 != oldProjX1 || projY1 != oldProjY1) {
-            drawBullet();
-            Serial.println("Projectile position updated from server: (" + String(projX1) + ", " + String(projY1) + ")");
-          }
-
           if (serverGameState == PLAYER2_TURN) {
             clientGameState = PLAYER2_TURN;
             player1Turn = false;
             sendClientTankInfo();
-          }
-          
-          if (tankHealth2 <= 0) {
-            whoWon = false; //Server's perspective
+          } else if (serverGameState == GAME_OVER) {
             clientGameState = GAME_OVER;
+            whoWon = true; //Server's perspective
             sendClientTankInfo();
           }
           break;
@@ -476,6 +490,8 @@ void loop()
           refreshDrawTank();
           drawTank(tankColor[tank1], tankPos1, barrelAngle1);
           drawTank(tankColor[tank2], tankPos2, barrelAngle2);
+
+          sendClientTankInfo();
 
           tankPos2 = controlMove(tankPos2);
 
@@ -624,114 +640,184 @@ Power selectPower(Power prevPower){
 
 void shoot(uint16_t color, int xPos, int angle, Power power){
 
-  if (!seeSaw.digitalRead(BUTTON_SELECT)) {
-    Serial.println("SELECT Button Pressed, SHOOT"); //Debugging
+    if (!seeSaw.digitalRead(BUTTON_SELECT)) {
+        Serial.println("SELECT Button Pressed, SHOOT"); //Debugging
 
-    //spawn projectile based on power type, give initial speed
-    if(power == SMALL){
-      //spawn a small projectile
-      projSizeR = smallSizeR;
-      Serial.println("Small projectile");
+        //spawn projectile based on power type, give initial speed
+        if(power == SMALL){
+            //spawn a small projectile
+            projSizeR = smallSizeR;
+            Serial.println("Small projectile");
 
-      //give large initial speed
-      speed = 12;
-    } else if(power == MEDIUM){
-      //spawn a medium projectile
-      projSizeR = medSizeR;
-      Serial.println("Small projectile");
+            //give large initial speed
+            speed = smallSpd;
+        } else if(power == MEDIUM){
+            //spawn a medium projectile
+            projSizeR = medSizeR;
+            Serial.println("Small projectile");
 
-      //give medium initial speed
-      speed = 10;
-    } else {
-      //spawn a large projectile
-      projSizeR = largeSizeR;
-      Serial.println("Small projectile");
+            //give medium initial speed
+            speed = medSpd;
+        } else {
+            //spawn a large projectile
+            projSizeR = largeSizeR;
+            Serial.println("Small projectile");
 
-      //give small initial speed
-      speed = 8;
+            //give small initial speed
+            speed = largeSpd;
+        }
+
+        //calculate velocity
+        float angleRad = angle * DEG_TO_RAD;
+
+        //init projectile at tip of barrel X and Y pos
+        if (serverGameState == PLAYER1_TURN) {
+            projX1 = xPos + (projOffset+projSizeR/2) * cos(angleRad); 
+            projY1 = tankBarrelY - (projOffset+projSizeR/2) * sin(angleRad);
+        } else if (serverGameState == PLAYER2_TURN) {
+            projX2 = xPos + (projOffset+projSizeR/2) * cos(angleRad); 
+            projY2 = tankBarrelY - (projOffset+projSizeR/2) * sin(angleRad);
+        }
+
+        vx = speed * cos(angleRad);
+        vy = -speed * sin(angleRad);
+
+        //calculate projectile motion and check for collisions/hit
+        projectileMotion(color, power);
     }
-
-    //calculate velocity
-    float angleRad = angle * DEG_TO_RAD;
-
-    //init projectile at tip of barrel X and Y pos
-    projX2 = xPos + (projOffset+projSizeR/2) * cos(angleRad); 
-    projY2 = tankBarrelY - (projOffset+projSizeR/2) * sin(angleRad);
-    
-    vx = speed * cos(angleRad);
-    vy = -speed * sin(angleRad);
-  
-    //pause game until projectile strikes ground
-    while((projY2 <= floorHeight) & (projX2 <= screenWidth) & (projX2 >= 0)){
-      //draw projectile in new position
-      projectileMotion(color);
-    }
-
-    //check collision
-    checkCollision(power);
-    
-    clientGameState = PLAYER1_TURN; //end turn after shooting
-    sendClientTankInfo();
-  }
 }
 
 void checkCollision(Power power){
-  //check projX position and distance from player
-
-  //calculate damage
-
-  //update health bar
-
-  //vibration
-  if(power == SMALL){
-    M5.Axp.SetVibration(true);
-    delay(100);
-  } else if(power == MEDIUM){
-    M5.Axp.SetVibration(true);
-    delay(250);
-  } else {
-    M5.Axp.SetVibration(true);
-    delay(400);
+  //check if out of screen
+  if(projX2 > screenWidth || projX2 < 0){
+    Serial.println("MISS, out of screen");
+    collision = true;
+    return;
   }
 
-  M5.Axp.SetVibration(false);
+  //check for collision with ground
+  if(projY2 >= floorHeight){
+    //vibrate
+    M5.Axp.SetVibration(true);
+    delay(100);
+    M5.Axp.SetVibration(false);
+
+    Serial.println("MISS, landed on ground");
+
+    collision = true;
+    return;
+  }
+
+  float targetX;
+  if(serverGameState == PLAYER1_TURN){
+    targetX = tankPos2;
+  } else {
+    targetX = tankPos1;
+  }
+
+  // get hit box
+  int hitBoxLeft   = targetX - tankSizeX / 2.0 - projSizeR;
+  int hitBoxRight  = targetX + tankSizeX / 2.0 + projSizeR;
+  int hitBoxTop    = floorHeight - tankSizeY - tankSizeR / 2.0;
+  int hitBoxBottom = floorHeight;
+
+  // --- Check collision (box) ---
+  bool hitX = (projX2 >= hitBoxLeft && projX2 <= hitBoxRight);
+  bool hitY = (projY2 >= hitBoxTop  && projY2 <= hitBoxBottom);
+
+  Serial.printf("proj size: %d\n");
+  Serial.printf("proj(%.1f, %.1f) | tank: (%.1f, %.1f)\n", projX2, projY2, targetX, floorHeight - tankSizeY);
+  Serial.printf("inX: %d inY: %d\n", hitX, hitY);
+
+  if(hitX && hitY){
+    //check which power
+    if(power == SMALL){
+      //vibrate
+      M5.Axp.SetVibration(true);
+      delay(200);
+    } else if(power == MEDIUM){
+      //vibrate
+      M5.Axp.SetVibration(true);
+      delay(400);
+    } else {
+      //vibrate
+      M5.Axp.SetVibration(true);
+      delay(600);
+    }
+
+    Serial.println("HIT!");
+    M5.Axp.SetVibration(false);
+    damage(power);
+
+    collision = true;
+    return;
+  } else {
+    Serial.println("MISS, not in hitbox");
+
+    collision = false;
+  }
 }
 
-void projectileMotion(uint16_t color){
-  //calculate new position and velocity
-  projX2 += vx;
-  projY2 += vy;
+void projectileMotion(uint16_t color, Power power){
+  //pause game until projectile strikes ground
+  collision = false;
+  while(!collision){
+    //calculate new position and velocity
+    projX2 += vx;
+    projY2 += vy;
 
-  vy += gravity;  // gravity pulls down
+    vy += gravity;  // gravity pulls down
 
-  Serial.printf("projX: %f - projY: %f\n", projX2, projY2); //debug
+    Serial.printf("projX: %f - projY: %f\n", projX2, projY2); //debug
 
-  // draw projectile in new position
-  M5.Lcd.fillCircle(projX2, projY2, projSizeR, color);
+    // draw projectile in new position
+    M5.Lcd.fillCircle(projX2, projY2, projSizeR, color);
 
-  //small delay for animation
-  delay(50);
+    //check for collision
+    checkCollision(power);
+    sendClientTankInfo(); //update server with new projectile values
 
-  //erase previous projectile
-  M5.Lcd.fillCircle(projX2, projY2, projSizeR, skyColor);
+    //small delay for animation
+    delay(50);
+
+    //erase previous projectile
+    M5.Lcd.fillCircle(projX2, projY2, projSizeR, skyColor);
+  }
+
+  //switch turn after collision
+  if(clientGameState == PLAYER1_TURN){
+    clientGameState = PLAYER2_TURN;
+    player1Turn = false;
+  } else if(clientGameState == PLAYER2_TURN){
+    serverGameState = PLAYER1_TURN;
+    clientGameState = PLAYER1_TURN;
+    player1Turn = true;
+  }
+  sendClientTankInfo(); //update server with new game state
 }
 
-void checkBoarderLimit() {
-  // if (tankPos1 < 0) tankPos1 = 0;
-  // if (tankPos1 > screenWidth - playerSize) tankPos1 = screenWidth - playerSize;
-  // if (player1YPos < 0) player1YPos = 0;
-  // if (player1YPos > screenHeight - playerSize) player1YPos = screenHeight - playerSize;
-}
+void damage(Power power){
+  int dmg = 0;
+  if(power == SMALL){
+    dmg = smallDmg;
+  } else if(power == MEDIUM){
+    dmg = medDmg;
+  } else {
+    dmg = largeDmg;
+  }
 
-void checkCollision() {
-  // if (tankPos1 < tankPos2 + 4 &&
-  //     tankPos1 + 4*player1Speed > tankPos2 &&
-  //     player1YPos < player2YPos + 4 &&
-  //     player1YPos + 4*player1Speed > player2YPos) {
-  //   //Serial.println("Collision!"); //Debugging
-  //   // End Game
-  //   drawGameOver();
-  // }
+  if(serverGameState == PLAYER1_TURN){
+    //damage player 2
+    tankHealth2 -= dmg;
+    Serial.printf("Player 2 Health: %d\n", tankHealth2);
+  } else if(serverGameState == PLAYER2_TURN){
+    //damage player 1
+    tankHealth1 -= dmg;
+    Serial.printf("Player 1 Health: %d\n", tankHealth1);
+  }
+
+  //BLUETOOTH
+  sendClientTankInfo(); //update client with new health values
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -794,6 +880,7 @@ void tankSelectionScreen() {
         Serial.println("Player 2 ready with tank " + tankName[i]);
         tank2 = i;
         player2Ready = true;
+        clientGameState = PLAYER1_TURN;
       }
       delay(200);
   }
@@ -923,7 +1010,7 @@ void drawTank(uint16_t color,int xPos,int angle){
 }
 
 void drawBarrelOutline() {
-  if (player1Turn) {
+  if (serverGameState == PLAYER1_TURN) {
     int power1Ratio = 3;
     if (tankPower1 == SMALL) power1Ratio = 3;
     else if (tankPower1 == MEDIUM) power1Ratio = 2;
@@ -935,7 +1022,7 @@ void drawBarrelOutline() {
     M5.Lcd.drawLine(xStart1, yStart1, xEnd1, yEnd1, BLACK);
   }
 
-  if (!player1Turn) {
+  if (serverGameState == PLAYER2_TURN) {
     int power2Ratio = 3;
     if (tankPower2 == SMALL) power2Ratio = 3;
     else if (tankPower2 == MEDIUM) power2Ratio = 2;
@@ -949,58 +1036,28 @@ void drawBarrelOutline() {
 }
 
 void refreshDrawTank() {
-  if (clientGameState == PLAYER1_TURN && oldTankPos1 != tankPos1) {
+  if (clientGameState == PLAYER1_TURN &&
+     (oldTankPos1 != tankPos1 || oldBarrelAngle1 != barrelAngle1)) {
     M5.Lcd.fillRect(oldTankPos1 - tankSizeX - 60, tankBodyY - 70, tankSizeX + 120, tankSizeY + 70, skyColor);
   }
 
-  if (clientGameState == PLAYER2_TURN && oldTankPos2 != tankPos2) {
+  if (clientGameState == PLAYER2_TURN && (oldTankPos2 != tankPos2 || oldBarrelAngle2 != barrelAngle2)) {
     M5.Lcd.fillRect(oldTankPos2 - tankSizeX - 60, tankBodyY - 70, tankSizeX + 120, tankSizeY + 70, skyColor);
   }
 }
 
-void drawBullet() {
-    //spawn projectile based on power type, give initial speed
-    if(tankPower1 == SMALL){
-      //spawn a small projectile
-      projSizeR = smallSizeR;
-      Serial.println("Small projectile");
+void drawProjectile1(uint16_t color, Power power){
+  //power type / size
+  if(power == SMALL){
+    projSizeR = smallSizeR;
+  } else if(power == MEDIUM){
+    projSizeR = medSizeR;
+  } else {
+    projSizeR = largeSizeR;
+  }
 
-      //give large initial speed
-      speed = 12;
-    } else if(tankPower1 == MEDIUM){
-      //spawn a medium projectile
-      projSizeR = medSizeR;
-      Serial.println("Small projectile");
-
-      //give medium initial speed
-      speed = 10;
-    } else {
-      //spawn a large projectile
-      projSizeR = largeSizeR;
-      Serial.println("Small projectile");
-
-      //give small initial speed
-      speed = 8;
-    }
-
-    //calculate velocity
-    float angleRad = barrelAngle1 * DEG_TO_RAD;
-
-    //init projectile at tip of barrel X and Y pos
-    projX1 = tankPos1 + (projOffset+projSizeR/2) * cos(angleRad); 
-    projY1 = tankBarrelY - (projOffset+projSizeR/2) * sin(angleRad);
-    
-    vx = speed * cos(angleRad);
-    vy = -speed * sin(angleRad);
-  
-    //pause game until projectile strikes ground
-    while((projY1 <= floorHeight) & (projX1 <= screenWidth) & (projX1 >= 0)){
-      //draw projectile in new position
-      projectileMotion(tankColor[tank1]);
-    }
-
-    //check collision
-    checkCollision(tankPower1);
+  //draw projectile
+  M5.Lcd.fillCircle(projX1, projY1, projSizeR, color);
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -1023,9 +1080,10 @@ void sendClientTankInfo() {
   }
   
   Serial.println("Updating server with new position...");
-  String message = String(clientGameState) + "," + String(tank2) + "," + 
-                   String(tankHealth2) + "=" + String(tankPower2) + "+" + String(tankPos2) + ">" + String(projX2) + 
-                   "," + String(projY2);
+  String message = String(clientGameState) + "_" + String(tank2) + "-" + 
+                   String(tankHealth2) + "=" + String(tankPower2) + "+" + 
+                   String(tankPos2) + ">" + String(projX2) + 
+                   "," + String(projY2) + "@" + String(barrelAngle2) + "}";
   Serial.println("Sending position to server: " + message);
   
   // Use writeValue with response=false to avoid blocking
